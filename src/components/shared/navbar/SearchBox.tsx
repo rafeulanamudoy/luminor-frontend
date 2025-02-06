@@ -7,10 +7,10 @@ import { useState } from "react";
 
 const SearchBox = () => {
   const [isOpen, setIsOpen] = useState("");
-  console.log(isOpen)
+  // console.log(isOpen)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleSearch = (data: any) => {
-    console.log(data);
+    // console.log(data);
   };
   return (
     <div className="relative ">

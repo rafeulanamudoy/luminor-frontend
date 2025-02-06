@@ -29,6 +29,7 @@ import {
   useGetuserQuery,
 } from "@/redux/Api/messageApi";
 import { setUser } from "@/redux/ReduxFunction";
+import { conforms } from "lodash";
 
 const Page: React.FC = () => {
   const router = useRouter();
@@ -50,13 +51,12 @@ const Page: React.FC = () => {
     getToUser?.data?.client?.email ||
     getToUser?.data?.retireProfessional?.email;
 
-  const { data: oldMessages } = useGetMessageQuery({ user1, user2 });
-  const { data: oldSingleMessages } = useGetSingleMessagesQuery(
-    { id: id.id },
-    {
-      skip: !id.id,
-    }
-  );
+  const {
+    data: oldMessages,
+    refetch,
+    isFetching,
+  } = useGetMessageQuery({ user1, user2 });
+
   // console.log(oldMessages, "check old messages");
   // console.log(oldSingleMessages, "check old single messages");
   const { data: getConversation } = useGetConversationQuery(undefined);
@@ -64,24 +64,127 @@ const Page: React.FC = () => {
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const [users, setUsers] = useState<any[]>(getConversation?.data || []);
   const [offerNotification, setOfferNotification] = useState(0);
-  const [timeStamp, setTimeStamp] = useState("");
+
   // const [messageNotifications, setmessageNotifications] = useState(0);
 
   // const [offerNotification, setOfferNotification] = useState(0);
 
   // console.log('My Receive Mail is:', getConversation)
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [selectedImages, setSelectedImages] = useState<File[]>([]);
+  // console.log(selectedImages);
+  const [selectedBase64Images, setSelectedBase64Images] = useState<string[]>(
+    []
+  );
+  const [showSidebar, setShowSidebar] = useState(false);
+
+  useEffect(() => {
+    if (!token?.email) {
+      return;
+    }
+
+    const mysocket = io("ws://localhost:5001");
+    setSocket(mysocket);
+
+    mysocket.on("connect", () => {
+      console.log("Connected to socket.io.");
+      mysocket.emit("register", JSON.stringify({ email: token?.email }));
+    });
+
+    mysocket.on("conversation-list", (data) => {
+      // console.log(data, "check convirsation list  data");
+      console.log(data, "check data in conversation list");
+      setUsers(data);
+      setIsLoading(false);
+    });
+
+    mysocket.on("privateMessage", (data) => {
+      const { message, fromEmail } = data;
+      console.log(getToUser, "check user");
+
+      if (
+        message &&
+        (getToUser?.data?.retireProfessional
+          ? getToUser?.data?.retireProfessional?.email === fromEmail
+          : getToUser?.data?.client?.email === fromEmail)
+      ) {
+        setInbox((prevInbox) => [...prevInbox, message]);
+      }
+    });
+
+    mysocket.on("createZoomMeeting", (data) => {
+      // console.log("Zoom meeting data received from socket:", data);
+      const { savedMessage } = data;
+      // console.log(JSON.parse(data));
+
+      // console.log("my meeting link is", data);
+      // console.log("My start url is", savedMessage);
+      // console.log('my data is', data.start_url);
+      const { meetingLink } = savedMessage;
+
+      if (savedMessage && savedMessage.meetingLink) {
+        window.open(meetingLink, "_blank");
+
+        setInbox((prevInbox) => [...prevInbox, savedMessage]);
+      } else {
+        toast.error("Invalid Zoom meeting data received.");
+        // console.log("invalid data", data.start_url)
+      }
+    });
+
+    // Handle Zoom meeting errors
+    mysocket.on("zoomMeetingError", (err) => {
+      console.log("Zoom meeting error:", err);
+      toast.error("Failed to create Zoom meeting. Please try again.");
+    });
+    return () => {
+      // console.log("Cleaning up socket listeners...");
+      mysocket.off("connect");
+      mysocket.off("privateMessage");
+      mysocket.disconnect();
+    };
+  }, [token?.email, getToUser]);
   useEffect(() => {
     if (oldMessages?.data?.messages) {
       setInbox(oldMessages?.data?.messages);
+
+      // let currentUser = users.find((user) => user.email === user2);
+      // console.log(currentUser, "check current user");
+
+      // if (currentUser && currentUser.unseenMessageCount !== 0) {
+
+      //   const updatedUsers = users.map((user) =>
+      //     user.email === user2
+      //       ? { ...user, unseenMessageCount: 0 }
+      //       : user
+      //   );
+
+      //   setUsers(updatedUsers);
+      // }
     }
-  }, [oldMessages]);
+  }, [oldMessages, id]);
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        emojiPickerRef.current &&
+        !emojiPickerRef.current.contains(event.target as Node)
+      ) {
+        setShowEmojiPicker(false);
+      }
+    };
 
-  const handleClick = () => {
-    setTimeout(() => {
-      showFileBtn((prev) => !prev);
-    }, 200);
-  };
-
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+  useEffect(() => {
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showSidebar]);
   const handleFileClick = (type: string) => {
     const input = document.getElementById("fileInput") as HTMLInputElement;
 
@@ -96,24 +199,11 @@ const Page: React.FC = () => {
     input.click();
   };
 
-  // const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-  //   const target = e.target;
-  //   if (target?.files) {
-  //     const newFiles = Array.from(target.files);
-  //     setSelectedFiles(prevFiles => [...prevFiles, ...newFiles]);
-
-  //     // convert base64
-  //     const firstImageFile = newFiles[0];
-  //     if (firstImageFile) {
-  //       const reader = new FileReader()
-  //       reader.readAsDataURL(firstImageFile)
-  //       reader.onload = () => {
-  //         const base64String = reader.result
-  //         console.log(`My image base64 is: `, base64String);
-  //       }
-  //     }
-  //   }
-  // };
+  const handleClick = () => {
+    setTimeout(() => {
+      showFileBtn((prev) => !prev);
+    }, 200);
+  };
 
   const handleEmojiClick = (emojiObject: any) => {
     setMessages((prevMessages) => prevMessages + emojiObject.emoji);
@@ -125,10 +215,6 @@ const Page: React.FC = () => {
     setIsModalOpen((e) => !e);
   };
 
-  // const { data: profileData } = useGetProfileQuery(token?.id);
-
-  // console.log(profileData?.data?.retireProfessional?.stripe.isOnboardingSucess);
-
   const handleProjectModal = () => {
     if (isButtonDisabled) return;
     setIsButtonDisabled(true);
@@ -137,9 +223,6 @@ const Page: React.FC = () => {
       setIsButtonDisabled(false);
     });
   };
-  // 678f173ecd61d3d7199126de
-
-  // console.log("My user2 email", user2);
 
   const handleshowMessage = (user: {
     id: string;
@@ -148,6 +231,7 @@ const Page: React.FC = () => {
     lastName: string;
     profileUrl: string | null;
   }) => {
+    refetch();
     const { id, profileUrl } = user;
 
     router.push(`/chat/${id}`);
@@ -163,14 +247,6 @@ const Page: React.FC = () => {
     setInbox(oldMessages?.data?.messages);
     // console.log(filteredMessages, "chekc message list")
   };
-
-  // convert image to  base64
-
-  const [selectedImages, setSelectedImages] = useState<File[]>([]);
-  // console.log(selectedImages);
-  const [selectedBase64Images, setSelectedBase64Images] = useState<string[]>(
-    []
-  );
 
   const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -212,15 +288,12 @@ const Page: React.FC = () => {
     }
   };
 
-
   const onSendMessage = (e: any) => {
     e.preventDefault();
     if (!messages.trim() && selectedBase64Images.length === 0) {
       alert("Please enter a message or select an image.");
       return;
     }
-
-    // const base64Images = selectedImages.map(async (file) => await convertFileToBase64(file));
     if (messages.trim()) {
       const message: any = {
         toEmail: user2,
@@ -228,6 +301,7 @@ const Page: React.FC = () => {
         fromEmail: token?.email,
         media: selectedBase64Images,
       };
+      socket.emit("privateMessage", JSON.stringify(message));
 
       const temporaryMessage: any = {
         id: 1,
@@ -239,44 +313,41 @@ const Page: React.FC = () => {
         recipient: {
           email: user2,
         },
+        createdAt: Date.now(),
       };
 
       setInbox((prevInbox) => [...prevInbox, temporaryMessage]);
 
-      // const user = users.find((user) => user.email === user2);
-      // console.log(user, "check find user user");
-
-      // user.lastMessage = messages.trim();
-      // user.lastMessageTimestamp = Date.now();
-      // user.unseenMessageCount = 0;
-          console.log(users,"all users")
-      const currentUser = users.filter((user) => {
-        user.email === user2;
+      let currentUser = users.find((user) => {
+        return user.email === user2;
       });
-      console
-    
+
+      if (!currentUser) {
+        currentUser = {
+          email: getToUser?.data?.retireProfessional
+            ? getToUser?.data?.retireProfessional?.email
+            : getToUser?.data?.client?.email,
+          name: `${
+            getToUser?.data?.retireProfessional
+              ? getToUser.data.retireProfessional.name.firstName
+              : getToUser?.data?.client?.name.firstName
+          } 
+          ${
+            getToUser?.data?.retireProfessional
+              ? getToUser.data.retireProfessional.name.lastName
+              : getToUser?.data?.client?.name.lastName
+          }`,
+          profileUrl: getToUser?.data?.retireProfessional
+            ? getToUser?.data?.retireProfessional?.profileUrl
+            : getToUser?.data?.client?.profileUrl,
+        };
+      }
+      currentUser.lastMessage = messages.trim();
+      currentUser.lastMessageTimestamp = new Date().toISOString();
       const activeUser = users.filter((user) => {
-        user.email !== user2;
+        return user.email !== user2;
       });
-      console.log({ activeUser }, { currentUser }, { user2 }, { users }, [
-        ...currentUser,
-        ...activeUser,
-      ]);
-      setUsers([...currentUser, ...activeUser]);
-      //{
-      //     "id": "67989b44b51346fc0f26e4c6",
-      //     "email": "clark@example.com",
-      //     "name": "mickel clark",
-      //     "profileUrl": null,
-      //     "isOnline": true,
-      //     "room": "67a06c5fbcb90737bbaf2859",
-      //     "lastMessage": "okk wats up",
-      //     "lastMessageTimestamp": "2025-02-05T06:03:05.095Z",
-      //     "unseenMessageCount": 0
-      // }
-      // setUsers(data);
-
-      socket.emit("privateMessage", JSON.stringify(message));
+      setUsers([currentUser, ...activeUser]);
 
       setMessages("");
       setSelectedImages([]);
@@ -297,86 +368,6 @@ const Page: React.FC = () => {
     }
   };
 
-  // emoji picker
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        emojiPickerRef.current &&
-        !emojiPickerRef.current.contains(event.target as Node)
-      ) {
-        setShowEmojiPicker(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, []);
-
-  // console.log("my offer notification", messageNotifications);
-  //socket connection
-  useEffect(() => {
-    if (!token?.email) {
-      return;
-    }
-
-    const mysocket = io("ws://localhost:5001");
-    setSocket(mysocket);
-
-    mysocket.on("connect", () => {
-      console.log("Connected to socket.io.");
-      mysocket.emit("register", JSON.stringify({ email: token?.email }));
-    });
-
-    mysocket.on("conversation-list", (data) => {
-      // console.log(data, "check convirsation list  data");
-      setUsers(data);
-    });
-
-    mysocket.on("privateMessage", (data) => {
-      const { message } = data;
-      // console.warn(message);
-      if (message) {
-        setInbox((prevInbox) => [...prevInbox, message]);
-      }
-    });
-
-    mysocket.on("createZoomMeeting", (data) => {
-      // console.log("Zoom meeting data received from socket:", data);
-      const { savedMessage } = data;
-      // console.log(JSON.parse(data));
-
-      // console.log("my meeting link is", data);
-      // console.log("My start url is", savedMessage);
-      // console.log('my data is', data.start_url);
-      const { meetingLink } = savedMessage;
-
-      if (savedMessage && savedMessage.meetingLink) {
-        window.open(meetingLink, "_blank");
-
-        setInbox((prevInbox) => [...prevInbox, savedMessage]);
-      } else {
-        toast.error("Invalid Zoom meeting data received.");
-        // console.log("invalid data", data.start_url)
-      }
-    });
-
-    // Handle Zoom meeting errors
-    mysocket.on("zoomMeetingError", (err) => {
-      console.log("Zoom meeting error:", err);
-      toast.error("Failed to create Zoom meeting. Please try again.");
-    });
-    return () => {
-      // console.log("Cleaning up socket listeners...");
-      mysocket.off("connect");
-      mysocket.off("privateMessage");
-      mysocket.disconnect();
-    };
-  }, [token?.email]);
-
-  const [showSidebar, setShowSidebar] = useState(false);
-
   const handleSidebar = () => {
     setShowSidebar(!showSidebar);
   };
@@ -387,13 +378,9 @@ const Page: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [showSidebar]);
-
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
   return (
     <section>
       <div className="container mx-auto pt-[20px]">
@@ -564,17 +551,21 @@ const Page: React.FC = () => {
           <div className="flex-1">
             <div className="mx-auto bg-white p-4 pb-0 h-full rounded-[10px]">
               <div className="flex flex-col overflow-y-auto  h-full">
-                <ChatWindow
-                  handleOpenModal={handleOpenModal}
-                  messages={inbox}
-                  currentUser={user1}
-                  profileUrl={profileUrl}
-                  colorScheme={{
-                    senderBg: "bg-[#F2FAFF] text-[#4A4C56]",
-                    receiverBg: "bg-[#F8F8F8] text-[#4A4C56]",
-                  }}
-                  senderName={""}
-                />
+                {isFetching ? (
+                  <div>loading....................</div>
+                ) : (
+                  <ChatWindow
+                    handleOpenModal={handleOpenModal}
+                    messages={inbox}
+                    currentUser={user1}
+                    profileUrl={profileUrl}
+                    colorScheme={{
+                      senderBg: "bg-[#F2FAFF] text-[#4A4C56]",
+                      receiverBg: "bg-[#F8F8F8] text-[#4A4C56]",
+                    }}
+                    senderName={""}
+                  />
+                )}
               </div>
             </div>
           </div>
