@@ -8,6 +8,7 @@ import projectImgFallback from '@/assets/images/package.png';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useClientListQuery, useProfessionalListQuery } from '@/redux/Api/projectApi';
+import demoprofile from "@/assets/images/avatar.jpg";
 
 
 const FeaturedProject: React.FC = () => {
@@ -134,7 +135,7 @@ const FeaturedProject: React.FC = () => {
                                     <div className="flex items-center gap-2">
                                         <div className="h-15 w-10 overflow-hidden rounded-full">
                                             <Image
-                                                src={data?.profileUrl || profileImgFallback}
+                                                src={ profileImgFallback}
                                                 alt={data.client?.name?.firstName || "Client"}
                                                 width={40}
                                                 height={40}

@@ -114,6 +114,8 @@ const Page: React.FC = () => {
     });
 
     mysocket.on("createZoomMeeting", (data) => {
+
+      // console.log(data,"checkd data")
       // console.log("Zoom meeting data received from socket:", data);
       const { savedMessage } = data;
       // console.log(JSON.parse(data));
@@ -363,6 +365,8 @@ const Page: React.FC = () => {
       };
 
       socket.emit("createZoomMeeting", JSON.stringify(callInfo));
+      console.log(callInfo,"check zoom link")
+      // setInbox((prevInbox)=>[...prevInbox])
     } else {
       toast.error("Socket connection not established.");
     }
