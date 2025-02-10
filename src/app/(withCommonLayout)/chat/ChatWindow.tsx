@@ -55,7 +55,9 @@ const MessageBubble: FC<MessageBubbleProps> = ({
   colorScheme,
   profileUrl,
 }) => {
-  const isSender = message?.sender?._id == currentUser;
+  const isSender = message?.sender._id == currentUser;
+  // console.log(message.sender, "from chat window message");
+  // console.log(currentUser, "from chat window current user");
 
   const token = useDecodedToken();
   const { data: profileData } = useGetProfileQuery(token?.id);

@@ -27,6 +27,8 @@ import {
   useGetMessageQuery,
   useGetuserQuery,
 } from "@/redux/Api/messageApi";
+import { conforms } from "lodash";
+import { useGetOfferQuery } from "@/redux/Api/offerApi";
 
 const Page: React.FC = () => {
   const router = useRouter();
@@ -68,8 +70,10 @@ const Page: React.FC = () => {
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const [users, setUsers] = useState<any[]>(getConversation?.data || []);
   const [offerNotification, setOfferNotification] = useState(0);
+  const [latestOffer, setLatestOffer] = useState();
   const socketRef = useRef<Socket | null>(null);
   const [isSocketReady, setIsSocketReady] = useState(false);
+  const { data: getoffer, refetch: offerRefetch } = useGetOfferQuery(token?.id);
   // const [messageNotifications, setmessageNotifications] = useState(0);
 
   // const [offerNotification, setOfferNotification] = useState(0);
@@ -86,9 +90,10 @@ const Page: React.FC = () => {
 
   useEffect(() => {
     if (id) {
+      setOfferNotification(getoffer?.data?.data?.offersWithUserInfo?.count);
       refetch();
     }
-  }, [id, refetch]);
+  }, [getoffer?.data?.data?.offersWithUserInfo?.count, id, refetch]);
   useEffect(() => {
     if (!token?.email) return;
 
@@ -99,27 +104,11 @@ const Page: React.FC = () => {
       mysocket.on("connect", () => {
         console.log("Connected to socket.io.");
         setIsSocketReady(true);
-        mysocket.emit("register", JSON.stringify({ email: token?.email }));
-
-        // Emit userInChat event when connected
-        if (getToUser?.data) {
-          const chattingWith =
-            getToUser?.data?.[
-              getToUser?.data?.retireProfessional
-                ? "retireProfessional"
-                : "client"
-            ]?.email;
-
-          // console.log("Sending userInChat event on connect:", {
-          //   userEmail: token?.email,
-          //   chattingWith,
-          // });
-
-          mysocket.emit(
-            "userInChat",
-            JSON.stringify({ userEmail: token?.email, chattingWith })
-          );
-        }
+        mysocket.emit("register", JSON.stringify({ id: token?.id }));
+        mysocket.emit(
+          "userInChat",
+          JSON.stringify({ userId: token?.id, chattingWith: id.id })
+        );
       });
 
       mysocket.on("conversation-list", (data) => {
@@ -129,28 +118,54 @@ const Page: React.FC = () => {
         setUsers(data);
         setIsLoading(false);
       });
-
+      mysocket.on("sendOffer", (data) => {
+        // console.log("Received conversation list:", data);
+        console.log(data, "check data from useeffet sendOffer");
+        console.log(data.offer, "heck data from useeffet sendOffer");
+        setOfferNotification(data?.offer?.count);
+        setLatestOffer(data?.offer);
+      });
       mysocket.on("privateMessage", (data) => {
-        // console.log("Received private message:", data);
-        const { message, fromEmail } = data;
+        console.log("Received private message:", data);
+        const { message, fromUserId } = data;
+        console.log(getToUser, "check get to user");
+        console.log(fromUserId, "check from email");
+
         if (
           message &&
           getToUser?.data?.[
             getToUser?.data?.retireProfessional
               ? "retireProfessional"
               : "client"
-          ]?.email === fromEmail
+          ]?._id === fromUserId
         ) {
           setInbox((prevInbox) => [...prevInbox, message]);
         }
+
+        // setInbox((prevInbox) => [...prevInbox, message]);
       });
 
       mysocket.on("createZoomMeeting", (data) => {
         // console.log("Received Zoom meeting data:", data);
-        const { savedMessage } = data;
-        if (savedMessage?.meetingLink) {
-          window.open(savedMessage.meetingLink, "_blank");
-          setInbox((prevInbox) => [...prevInbox, savedMessage]);
+        const { from, populateMessage } = data;
+        console.log(populateMessage, from, "check zoom saved message");
+        if (populateMessage?.meetingLink) {
+          console.log(from, "check from create meeting");
+          window.open(populateMessage?.meetingLink, "_blank");
+          const loggedInUserId =
+            getToUser?.data?.[
+              getToUser?.data?.retireProfessional
+                ? "retireProfessional"
+                : "client"
+            ]?._id;
+
+          if (
+            loggedInUserId === from ||
+            loggedInUserId === populateMessage?.sender?._id ||
+            loggedInUserId === populateMessage?.recipient?._id
+          ) {
+            setInbox((prevInbox) => [...prevInbox, populateMessage]);
+          }
         } else {
           toast.error("Invalid Zoom meeting data received.");
         }
@@ -173,7 +188,7 @@ const Page: React.FC = () => {
         socketRef.current = null;
       }
     };
-  }, [token?.email, getToUser]);
+  }, [token?.email, getToUser, token?.id, id.id]);
 
   useEffect(() => {
     if (oldMessages?.data?.messages) {
@@ -241,7 +256,7 @@ const Page: React.FC = () => {
   };
   const onSendMessage = (e: any) => {
     e.preventDefault();
-    if (!messages.trim() && selectedBase64Images.length === 0) {
+    if (!messages.trim()) {
       alert("Please enter a message or select an image.");
       return;
     }
@@ -253,9 +268,9 @@ const Page: React.FC = () => {
 
     if (messages.trim()) {
       const message: any = {
-        toEmail: user2,
+        toUserId: id.id,
         message: messages.trim() || null,
-        fromEmail: token?.email,
+        fromUserId: token?.id,
         media: selectedBase64Images,
       };
 
@@ -312,8 +327,8 @@ const Page: React.FC = () => {
     }
 
     const callInfo = {
-      fromEmail: token?.email,
-      toEmail: user2,
+      fromUserId: token?.id,
+      toUserId: id.id,
     };
 
     socketRef.current.emit("createZoomMeeting", JSON.stringify(callInfo));
@@ -346,6 +361,7 @@ const Page: React.FC = () => {
     setShowEmojiPicker((prev) => !prev);
   };
   const handleOpenModal = () => {
+    offerRefetch();
     setIsModalOpen((e) => !e);
   };
 
@@ -421,88 +437,6 @@ const Page: React.FC = () => {
       );
     }
   };
-
-  // const onSendMessage = (e: any) => {
-  //   e.preventDefault();
-  //   if (!messages.trim() && selectedBase64Images.length === 0) {
-  //     alert("Please enter a message or select an image.");
-  //     return;
-  //   }
-  //   if (messages.trim()) {
-  //     const message: any = {
-  //       toEmail: user2,
-  //       message: messages.trim() || null,
-  //       fromEmail: token?.email,
-  //       media: selectedBase64Images,
-  //     };
-  //     socket.emit("privateMessage", JSON.stringify(message));
-
-  //     const temporaryMessage: any = {
-  //       id: 1,
-  //       message: messages.trim() || null,
-  //       meetingLink: "",
-  //       sender: {
-  //         email: token?.email,
-  //       },
-  //       recipient: {
-  //         email: user2,
-  //       },
-  //       createdAt: Date.now(),
-  //     };
-
-  //     setInbox((prevInbox) => [...prevInbox, temporaryMessage]);
-
-  //     let currentUser = users.find((user) => {
-  //       return user.email === user2;
-  //     });
-
-  //     if (!currentUser) {
-  //       currentUser = {
-  //         email: getToUser?.data?.retireProfessional
-  //           ? getToUser?.data?.retireProfessional?.email
-  //           : getToUser?.data?.client?.email,
-  //         name: `${
-  //           getToUser?.data?.retireProfessional
-  //             ? getToUser.data.retireProfessional.name.firstName
-  //             : getToUser?.data?.client?.name.firstName
-  //         }
-  //         ${
-  //           getToUser?.data?.retireProfessional
-  //             ? getToUser.data.retireProfessional.name.lastName
-  //             : getToUser?.data?.client?.name.lastName
-  //         }`,
-  //         profileUrl: getToUser?.data?.retireProfessional
-  //           ? getToUser?.data?.retireProfessional?.profileUrl
-  //           : getToUser?.data?.client?.profileUrl,
-  //       };
-  //     }
-  //     currentUser.lastMessage = messages.trim();
-  //     currentUser.lastMessageTimestamp = new Date().toISOString();
-  //     const activeUser = users.filter((user) => {
-  //       return user.email !== user2;
-  //     });
-  //     setUsers([currentUser, ...activeUser]);
-
-  //     setMessages("");
-  //     setSelectedImages([]);
-  //     setSelectedBase64Images([]);
-  //   }
-  // };
-
-  // const handleCreateZoomMeeting = () => {
-  //   if (socket) {
-  //     const callInfo = {
-  //       fromEmail: token?.email,
-  //       toEmail: user2,
-  //     };
-
-  //     socket.emit("createZoomMeeting", JSON.stringify(callInfo));
-  //     console.log(callInfo, "check zoom link");
-  //     // setInbox((prevInbox)=>[...prevInbox])
-  //   } else {
-  //     toast.error("Socket connection not established.");
-  //   }
-  // };
 
   const handleSidebar = () => {
     setShowSidebar(!showSidebar);
@@ -625,7 +559,13 @@ const Page: React.FC = () => {
                   Current Offers
                 </button>
                 {isModalOpen && (
-                  <OffersModal onClose={handleOpenModal} user1={user1} />
+                  <OffersModal
+                    onClose={handleOpenModal}
+                    user1={token.id}
+                    offerNotification={offerNotification}
+                    setOfferNotification={setOfferNotification}
+                    latestOffer={latestOffer}
+                  />
                 )}
 
                 <Button
@@ -637,8 +577,8 @@ const Page: React.FC = () => {
                 {isProjectModal && (
                   <ProjectModal
                     onClose={handleProjectModal}
-                    user1={user1}
-                    user2={user2}
+                    user1={token.id}
+                    user2={id.id}
                   />
                 )}
                 <Link className="hover:bg-slate-100 hover:shadow-xl" href={"/"}>
@@ -660,7 +600,7 @@ const Page: React.FC = () => {
                   {/* <span className="absolute top-0 right-0 bg-red-500 text-white text-sm rounded-full w-3 h-3 flex items-center justify-center"> {offerNotifications}</span> */}
                 </button>
                 {isModalOpen && (
-                  <OffersModal onClose={handleOpenModal} user1={user1} />
+                  <OffersModal onClose={handleOpenModal} user1={token?.id} />
                 )}
 
                 <button
@@ -673,8 +613,8 @@ const Page: React.FC = () => {
                 {isProjectModal && (
                   <ProjectModal
                     onClose={handleProjectModal}
-                    user1={user1}
-                    user2={user2}
+                    user1={token.id}
+                    user2={id.id}
                   />
                 )}
                 <Link className="hover:bg-slate-100 hover:shadow-xl" href={"/"}>
