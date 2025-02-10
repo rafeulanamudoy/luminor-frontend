@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import ChatWindow, { Message } from "@/app/(withCommonLayout)/chat/ChatWindow";
 import Button from "@/components/common/Button";
@@ -15,7 +15,7 @@ import { MdOutlineKeyboardVoice } from "react-icons/md";
 import EmojiPicker from "emoji-picker-react";
 import { IoMdMenu } from "react-icons/io";
 import { Video, FileText, Images } from "lucide-react";
-import io from "socket.io-client";
+import io, { Socket } from "socket.io-client";
 import demoimg from "@/assets/images/demoimg.png";
 import AllUsers from "@/app/(withCommonLayout)/chat/AllUsers";
 import useDecodedToken from "@/components/common/DecodeToken";
@@ -25,11 +25,8 @@ import { useParams, useRouter } from "next/navigation";
 import {
   useGetConversationQuery,
   useGetMessageQuery,
-  useGetSingleMessagesQuery,
   useGetuserQuery,
 } from "@/redux/Api/messageApi";
-import { setUser } from "@/redux/ReduxFunction";
-import { conforms } from "lodash";
 
 const Page: React.FC = () => {
   const router = useRouter();
@@ -42,29 +39,37 @@ const Page: React.FC = () => {
   const [inbox, setInbox] = useState<Message[]>([]);
   const [messages, setMessages] = useState<string>("");
   const [socket, setSocket] = useState<any>(null);
-  const user1 = token?.email;
+  const user1 = token?.id;
+
   const [profileUrl, setProfileUrl] = useState<string>(demoimg.src);
   const id = useParams();
   const { data: getToUser } = useGetuserQuery(id.id);
+  console.log(id.id, "check id");
 
-  const user2 =
-    getToUser?.data?.client?.email ||
-    getToUser?.data?.retireProfessional?.email;
+  const user2 = useMemo(() => {
+    return (
+      getToUser?.data?.client?.email ||
+      getToUser?.data?.retireProfessional?.email
+    );
+  }, [getToUser]);
 
   const {
     data: oldMessages,
     refetch,
     isFetching,
-  } = useGetMessageQuery({ user1, user2 });
+  } = useGetMessageQuery({ user1, user2: id.id }, { skip: !id.id });
 
   // console.log(oldMessages, "check old messages");
   // console.log(oldSingleMessages, "check old single messages");
-  const { data: getConversation } = useGetConversationQuery(undefined);
+  const { data: getConversation } = useGetConversationQuery(undefined, {
+    skip: !id.id,
+  });
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const [users, setUsers] = useState<any[]>(getConversation?.data || []);
   const [offerNotification, setOfferNotification] = useState(0);
-
+  const socketRef = useRef<Socket | null>(null);
+  const [isSocketReady, setIsSocketReady] = useState(false);
   // const [messageNotifications, setmessageNotifications] = useState(0);
 
   // const [offerNotification, setOfferNotification] = useState(0);
@@ -80,92 +85,101 @@ const Page: React.FC = () => {
   const [showSidebar, setShowSidebar] = useState(false);
 
   useEffect(() => {
-    if (!token?.email) {
-      return;
+    if (id) {
+      refetch();
+    }
+  }, [id, refetch]);
+  useEffect(() => {
+    if (!token?.email) return;
+
+    if (!socketRef.current) {
+      const mysocket = io("ws://localhost:5001");
+      socketRef.current = mysocket;
+
+      mysocket.on("connect", () => {
+        console.log("Connected to socket.io.");
+        setIsSocketReady(true);
+        mysocket.emit("register", JSON.stringify({ email: token?.email }));
+
+        // Emit userInChat event when connected
+        if (getToUser?.data) {
+          const chattingWith =
+            getToUser?.data?.[
+              getToUser?.data?.retireProfessional
+                ? "retireProfessional"
+                : "client"
+            ]?.email;
+
+          // console.log("Sending userInChat event on connect:", {
+          //   userEmail: token?.email,
+          //   chattingWith,
+          // });
+
+          mysocket.emit(
+            "userInChat",
+            JSON.stringify({ userEmail: token?.email, chattingWith })
+          );
+        }
+      });
+
+      mysocket.on("conversation-list", (data) => {
+        // console.log("Received conversation list:", data);
+        console.log(data, "check data from useeffet convirsation list");
+
+        setUsers(data);
+        setIsLoading(false);
+      });
+
+      mysocket.on("privateMessage", (data) => {
+        // console.log("Received private message:", data);
+        const { message, fromEmail } = data;
+        if (
+          message &&
+          getToUser?.data?.[
+            getToUser?.data?.retireProfessional
+              ? "retireProfessional"
+              : "client"
+          ]?.email === fromEmail
+        ) {
+          setInbox((prevInbox) => [...prevInbox, message]);
+        }
+      });
+
+      mysocket.on("createZoomMeeting", (data) => {
+        // console.log("Received Zoom meeting data:", data);
+        const { savedMessage } = data;
+        if (savedMessage?.meetingLink) {
+          window.open(savedMessage.meetingLink, "_blank");
+          setInbox((prevInbox) => [...prevInbox, savedMessage]);
+        } else {
+          toast.error("Invalid Zoom meeting data received.");
+        }
+      });
+
+      mysocket.on("zoomMeetingError", (err) => {
+        console.log("Zoom meeting error:", err);
+        toast.error("Failed to create Zoom meeting. Please try again.");
+      });
     }
 
-    const mysocket = io("ws://localhost:5001");
-    setSocket(mysocket);
-
-    mysocket.on("connect", () => {
-      console.log("Connected to socket.io.");
-      mysocket.emit("register", JSON.stringify({ email: token?.email }));
-    });
-
-    mysocket.on("conversation-list", (data) => {
-      // console.log(data, "check convirsation list  data");
-      console.log(data, "check data in conversation list");
-      setUsers(data);
-      setIsLoading(false);
-    });
-
-    mysocket.on("privateMessage", (data) => {
-      const { message, fromEmail } = data;
-      console.log(getToUser, "check user");
-
-      if (
-        message &&
-        (getToUser?.data?.retireProfessional
-          ? getToUser?.data?.retireProfessional?.email === fromEmail
-          : getToUser?.data?.client?.email === fromEmail)
-      ) {
-        setInbox((prevInbox) => [...prevInbox, message]);
-      }
-    });
-
-    mysocket.on("createZoomMeeting", (data) => {
-
-      // console.log(data,"checkd data")
-      // console.log("Zoom meeting data received from socket:", data);
-      const { savedMessage } = data;
-      // console.log(JSON.parse(data));
-
-      // console.log("my meeting link is", data);
-      // console.log("My start url is", savedMessage);
-      // console.log('my data is', data.start_url);
-      const { meetingLink } = savedMessage;
-
-      if (savedMessage && savedMessage.meetingLink) {
-        window.open(meetingLink, "_blank");
-
-        setInbox((prevInbox) => [...prevInbox, savedMessage]);
-      } else {
-        toast.error("Invalid Zoom meeting data received.");
-        // console.log("invalid data", data.start_url)
-      }
-    });
-
-    // Handle Zoom meeting errors
-    mysocket.on("zoomMeetingError", (err) => {
-      console.log("Zoom meeting error:", err);
-      toast.error("Failed to create Zoom meeting. Please try again.");
-    });
     return () => {
-      // console.log("Cleaning up socket listeners...");
-      mysocket.off("connect");
-      mysocket.off("privateMessage");
-      mysocket.disconnect();
+      if (socketRef.current) {
+        socketRef.current.off("connect");
+        socketRef.current.off("conversation-list");
+        socketRef.current.off("privateMessage");
+        socketRef.current.off("createZoomMeeting");
+        socketRef.current.off("zoomMeetingError");
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
     };
   }, [token?.email, getToUser]);
+
   useEffect(() => {
     if (oldMessages?.data?.messages) {
       setInbox(oldMessages?.data?.messages);
-
-      // let currentUser = users.find((user) => user.email === user2);
-      // console.log(currentUser, "check current user");
-
-      // if (currentUser && currentUser.unseenMessageCount !== 0) {
-
-      //   const updatedUsers = users.map((user) =>
-      //     user.email === user2
-      //       ? { ...user, unseenMessageCount: 0 }
-      //       : user
-      //   );
-
-      //   setUsers(updatedUsers);
-      // }
     }
-  }, [oldMessages, id]);
+  }, [oldMessages, id.id]);
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -187,6 +201,124 @@ const Page: React.FC = () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [showSidebar]);
+
+  const handleshowMessage = (user: {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    profileUrl: string | null;
+  }) => {
+    if (!isSocketReady) {
+      console.warn("Socket is still connecting...");
+      return;
+    }
+    const { id, profileUrl, email } = user;
+    const updatedUsers = users.map((u: any) =>
+      u.id === id ? { ...u, unseenMessageCount: 0 } : u
+    );
+    console.log(updatedUsers, "check updatedusers");
+    setUsers(updatedUsers);
+    router.push(`/chat/${id}`);
+    // refetch();
+
+    if (socketRef.current) {
+      console.log("Sending userInChat event with:", {
+        userEmail: token?.email,
+        chattingWith: email,
+      });
+
+      socketRef.current.emit(
+        "userInChat",
+        JSON.stringify({ userEmail: token?.email, chattingWith: email })
+      );
+    } else {
+      console.error("Socket is not initialized.");
+    }
+
+    setProfileUrl(profileUrl || demoimg.src);
+    setInbox(oldMessages?.data?.messages);
+  };
+  const onSendMessage = (e: any) => {
+    e.preventDefault();
+    if (!messages.trim() && selectedBase64Images.length === 0) {
+      alert("Please enter a message or select an image.");
+      return;
+    }
+
+    if (!socketRef.current) {
+      toast.error("Socket connection not established.");
+      return;
+    }
+
+    if (messages.trim()) {
+      const message: any = {
+        toEmail: user2,
+        message: messages.trim() || null,
+        fromEmail: token?.email,
+        media: selectedBase64Images,
+      };
+
+      socketRef.current.emit("privateMessage", JSON.stringify(message));
+
+      const temporaryMessage: any = {
+        id: Date.now(), // Ensure a unique ID for temporary messages
+        message: messages.trim() || null,
+        meetingLink: "",
+        sender: { _id: token?.id },
+        recipient: { _id: id.id },
+        createdAt: new Date().toISOString(),
+      };
+
+      setInbox((prevInbox) => [...prevInbox, temporaryMessage]);
+      console.log(inbox, "check messages from send message handler");
+
+      let currentUser = users.find((user) => user.email === user2);
+
+      if (!currentUser) {
+        currentUser = {
+          email: getToUser?.data?.retireProfessional
+            ? getToUser?.data?.retireProfessional?.email
+            : getToUser?.data?.client?.email,
+          name: `${
+            getToUser?.data?.retireProfessional
+              ? getToUser.data.retireProfessional.name.firstName
+              : getToUser?.data?.client?.name.firstName
+          } ${
+            getToUser?.data?.retireProfessional
+              ? getToUser.data.retireProfessional.name.lastName
+              : getToUser?.data?.client?.name.lastName
+          }`,
+          profileUrl: getToUser?.data?.retireProfessional
+            ? getToUser?.data?.retireProfessional?.profileUrl
+            : getToUser?.data?.client?.profileUrl,
+        };
+      }
+
+      currentUser.lastMessage = messages.trim();
+      currentUser.lastMessageTimestamp = new Date().toISOString();
+
+      // setUsers([currentUser, ...users.filter((user) => user.email !== user2)]);
+
+      setMessages("");
+      setSelectedImages([]);
+      setSelectedBase64Images([]);
+    }
+  };
+  const handleCreateZoomMeeting = () => {
+    if (!socketRef.current) {
+      toast.error("Socket connection not established.");
+      return;
+    }
+
+    const callInfo = {
+      fromEmail: token?.email,
+      toEmail: user2,
+    };
+
+    socketRef.current.emit("createZoomMeeting", JSON.stringify(callInfo));
+    console.log(callInfo, "check zoom link");
+  };
   const handleFileClick = (type: string) => {
     const input = document.getElementById("fileInput") as HTMLInputElement;
 
@@ -226,29 +358,29 @@ const Page: React.FC = () => {
     });
   };
 
-  const handleshowMessage = (user: {
-    id: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    profileUrl: string | null;
-  }) => {
-    refetch();
-    const { id, profileUrl } = user;
+  // const handleshowMessage = (user: {
+  //   id: string;
+  //   email: string;
+  //   firstName: string;
+  //   lastName: string;
+  //   profileUrl: string | null;
+  // }) => {
+  //   refetch();
+  //   const { id, profileUrl } = user;
 
-    router.push(`/chat/${id}`);
+  //   router.push(`/chat/${id}`);
 
-    socket.emit(
-      "userInChat",
-      JSON.stringify({ userEmail: token?.email, chattingWith: user2 })
-    );
-    // console.log("handle show message");
+  //   socket.emit(
+  //     "userInChat",
+  //     JSON.stringify({ userEmail: token?.email, chattingWith: user2 })
+  //   );
+  //   // console.log("handle show message");
 
-    setProfileUrl(profileUrl || demoimg.src);
+  //   setProfileUrl(profileUrl || demoimg.src);
 
-    setInbox(oldMessages?.data?.messages);
-    // console.log(filteredMessages, "chekc message list")
-  };
+  //   setInbox(oldMessages?.data?.messages);
+  //   // console.log(filteredMessages, "chekc message list")
+  // };
 
   const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -290,87 +422,87 @@ const Page: React.FC = () => {
     }
   };
 
-  const onSendMessage = (e: any) => {
-    e.preventDefault();
-    if (!messages.trim() && selectedBase64Images.length === 0) {
-      alert("Please enter a message or select an image.");
-      return;
-    }
-    if (messages.trim()) {
-      const message: any = {
-        toEmail: user2,
-        message: messages.trim() || null,
-        fromEmail: token?.email,
-        media: selectedBase64Images,
-      };
-      socket.emit("privateMessage", JSON.stringify(message));
+  // const onSendMessage = (e: any) => {
+  //   e.preventDefault();
+  //   if (!messages.trim() && selectedBase64Images.length === 0) {
+  //     alert("Please enter a message or select an image.");
+  //     return;
+  //   }
+  //   if (messages.trim()) {
+  //     const message: any = {
+  //       toEmail: user2,
+  //       message: messages.trim() || null,
+  //       fromEmail: token?.email,
+  //       media: selectedBase64Images,
+  //     };
+  //     socket.emit("privateMessage", JSON.stringify(message));
 
-      const temporaryMessage: any = {
-        id: 1,
-        message: messages.trim() || null,
-        meetingLink: "",
-        sender: {
-          email: token?.email,
-        },
-        recipient: {
-          email: user2,
-        },
-        createdAt: Date.now(),
-      };
+  //     const temporaryMessage: any = {
+  //       id: 1,
+  //       message: messages.trim() || null,
+  //       meetingLink: "",
+  //       sender: {
+  //         email: token?.email,
+  //       },
+  //       recipient: {
+  //         email: user2,
+  //       },
+  //       createdAt: Date.now(),
+  //     };
 
-      setInbox((prevInbox) => [...prevInbox, temporaryMessage]);
+  //     setInbox((prevInbox) => [...prevInbox, temporaryMessage]);
 
-      let currentUser = users.find((user) => {
-        return user.email === user2;
-      });
+  //     let currentUser = users.find((user) => {
+  //       return user.email === user2;
+  //     });
 
-      if (!currentUser) {
-        currentUser = {
-          email: getToUser?.data?.retireProfessional
-            ? getToUser?.data?.retireProfessional?.email
-            : getToUser?.data?.client?.email,
-          name: `${
-            getToUser?.data?.retireProfessional
-              ? getToUser.data.retireProfessional.name.firstName
-              : getToUser?.data?.client?.name.firstName
-          } 
-          ${
-            getToUser?.data?.retireProfessional
-              ? getToUser.data.retireProfessional.name.lastName
-              : getToUser?.data?.client?.name.lastName
-          }`,
-          profileUrl: getToUser?.data?.retireProfessional
-            ? getToUser?.data?.retireProfessional?.profileUrl
-            : getToUser?.data?.client?.profileUrl,
-        };
-      }
-      currentUser.lastMessage = messages.trim();
-      currentUser.lastMessageTimestamp = new Date().toISOString();
-      const activeUser = users.filter((user) => {
-        return user.email !== user2;
-      });
-      setUsers([currentUser, ...activeUser]);
+  //     if (!currentUser) {
+  //       currentUser = {
+  //         email: getToUser?.data?.retireProfessional
+  //           ? getToUser?.data?.retireProfessional?.email
+  //           : getToUser?.data?.client?.email,
+  //         name: `${
+  //           getToUser?.data?.retireProfessional
+  //             ? getToUser.data.retireProfessional.name.firstName
+  //             : getToUser?.data?.client?.name.firstName
+  //         }
+  //         ${
+  //           getToUser?.data?.retireProfessional
+  //             ? getToUser.data.retireProfessional.name.lastName
+  //             : getToUser?.data?.client?.name.lastName
+  //         }`,
+  //         profileUrl: getToUser?.data?.retireProfessional
+  //           ? getToUser?.data?.retireProfessional?.profileUrl
+  //           : getToUser?.data?.client?.profileUrl,
+  //       };
+  //     }
+  //     currentUser.lastMessage = messages.trim();
+  //     currentUser.lastMessageTimestamp = new Date().toISOString();
+  //     const activeUser = users.filter((user) => {
+  //       return user.email !== user2;
+  //     });
+  //     setUsers([currentUser, ...activeUser]);
 
-      setMessages("");
-      setSelectedImages([]);
-      setSelectedBase64Images([]);
-    }
-  };
+  //     setMessages("");
+  //     setSelectedImages([]);
+  //     setSelectedBase64Images([]);
+  //   }
+  // };
 
-  const handleCreateZoomMeeting = () => {
-    if (socket) {
-      const callInfo = {
-        fromEmail: token?.email,
-        toEmail: user2,
-      };
+  // const handleCreateZoomMeeting = () => {
+  //   if (socket) {
+  //     const callInfo = {
+  //       fromEmail: token?.email,
+  //       toEmail: user2,
+  //     };
 
-      socket.emit("createZoomMeeting", JSON.stringify(callInfo));
-      console.log(callInfo,"check zoom link")
-      // setInbox((prevInbox)=>[...prevInbox])
-    } else {
-      toast.error("Socket connection not established.");
-    }
-  };
+  //     socket.emit("createZoomMeeting", JSON.stringify(callInfo));
+  //     console.log(callInfo, "check zoom link");
+  //     // setInbox((prevInbox)=>[...prevInbox])
+  //   } else {
+  //     toast.error("Socket connection not established.");
+  //   }
+  // };
 
   const handleSidebar = () => {
     setShowSidebar(!showSidebar);
@@ -561,7 +693,7 @@ const Page: React.FC = () => {
                   <ChatWindow
                     handleOpenModal={handleOpenModal}
                     messages={inbox}
-                    currentUser={user1}
+                    currentUser={user1 ?? ""}
                     profileUrl={profileUrl}
                     colorScheme={{
                       senderBg: "bg-[#F2FAFF] text-[#4A4C56]",
